@@ -77,7 +77,7 @@ theorem baseDecomp_length (b w v : ℕ) : (baseDecomp b w v).length = w := by
 theorem mem_baseDecomp_lt {b : ℕ} (hb : 0 < b) {w v d : ℕ}
     (hd : d ∈ baseDecomp b w v) : d < b := by
   induction w generalizing v with
-  | zero => exact absurd hd (List.not_mem_nil _)
+  | zero => simp at hd
   | succ w ih =>
     simp only [baseDecomp_succ, List.mem_cons] at hd
     rcases hd with rfl | hd
@@ -93,7 +93,7 @@ theorem evalDigits_baseDecomp {b : ℕ} (hb : 0 < b) {w v : ℕ}
     (hv : v < b ^ w) : evalDigits b (baseDecomp b w v) = v := by
   induction w generalizing v with
   | zero =>
-    simp [baseDecomp, evalDigits] at *
+    simp [baseDecomp] at *
     omega
   | succ w ih =>
     simp only [baseDecomp_succ, evalDigits_cons]
@@ -101,20 +101,20 @@ theorem evalDigits_baseDecomp {b : ℕ} (hb : 0 < b) {w v : ℕ}
       rw [Nat.div_lt_iff_lt_mul hb]
       rwa [← pow_succ]
     rw [ih hv']
-    omega
+    exact Nat.mod_add_div v b
 
 /-- **Soundness lemma**: if every digit is less than `b`, the evaluated
     sum is strictly less than `b ^ (number of digits)`.
 
     This is the core argument that lookup-constraining each word to
     `[0, 2^K)` forces the reconstructed value below `2^{K * w}`. -/
-theorem evalDigits_lt_pow {b : ℕ} (hb : 0 < b) {ds : List ℕ}
+theorem evalDigits_lt_pow {b : ℕ} (_ : 0 < b) {ds : List ℕ}
     (hds : ∀ d ∈ ds, d < b) : evalDigits b ds < b ^ ds.length := by
   induction ds with
-  | nil => simp [evalDigits]; positivity
+  | nil => simp [evalDigits]
   | cons d ds ih =>
     simp only [evalDigits_cons, List.length_cons]
-    have hd : d < b := hds d (List.mem_cons_self d ds)
+    have hd : d < b := hds d List.mem_cons_self
     have hds' : ∀ x ∈ ds, x < b := fun x hx => hds x (List.mem_cons_of_mem d hx)
     have ih' := ih hds'
     rw [pow_succ]
@@ -139,7 +139,7 @@ theorem evalDigits_lt_pow {b : ℕ} (hb : 0 < b) {ds : List ℕ}
 
     In the circuit, `b = 2^K` and `z_w = 0` (strict mode), which
     together with the running-sum recurrence imply `eval_eq`. -/
-structure StrictDecomp (b w v : ℕ) : Prop where
+structure StrictDecomp (b w v : ℕ) where
   words : List ℕ
   len_eq : words.length = w
   word_bound : ∀ d ∈ words, d < b
@@ -152,18 +152,18 @@ structure StrictDecomp (b w v : ℕ) : Prop where
     For Halo 2 with `b = 2^K`, `K = 10`: `v < 2^{10w}`. -/
 theorem soundness_runsum {b w v : ℕ} (hb : 0 < b)
     (d : StrictDecomp b w v) : v < b ^ w := by
-  rw [← d.eval_eq, ← d.len_eq]
-  exact evalDigits_lt_pow hb d.word_bound
+  have h := evalDigits_lt_pow hb d.word_bound
+  rwa [d.len_eq, d.eval_eq] at h
 
 /-- **Completeness of the running-sum range check.**
 
     Every value below `b^w` has a valid decomposition that the circuit
     would accept.  The witness is the standard base-`b` representation. -/
-theorem completeness_runsum {b w v : ℕ} (hb : 0 < b) (hv : v < b ^ w) :
+def completeness_runsum {b w v : ℕ} (hb : 0 < b) (hv : v < b ^ w) :
     StrictDecomp b w v where
   words := baseDecomp b w v
   len_eq := baseDecomp_length b w v
-  word_bound := fun d hd => mem_baseDecomp_lt hb hd
+  word_bound := fun _ hd => mem_baseDecomp_lt hb hd
   eval_eq := evalDigits_baseDecomp hb hv
 
 -- ============================================================================
@@ -190,7 +190,10 @@ theorem soundness_short {K s e : ℕ} (hs : s ≤ K)
     rw [← pow_add]; congr 1; omega
   rw [hpow] at he_shift
   -- Cancel the common factor 2^{K-s}
-  exact (mul_lt_mul_right (show 0 < 2 ^ (K - s) by positivity)).mp he_shift
+  by_contra h
+  push Not at h
+  have := Nat.mul_le_mul_right (2 ^ (K - s)) h
+  linarith
 
 /-- **Completeness of the short range check.**
 
@@ -199,11 +202,11 @@ theorem completeness_short {K s e : ℕ} (hs : s ≤ K) (he : e < 2 ^ s) :
     e < 2 ^ K ∧ e * 2 ^ (K - s) < 2 ^ K := by
   constructor
   · -- e < 2^s ≤ 2^K since s ≤ K
-    exact lt_of_lt_of_le he (Nat.pow_le_pow_left (by omega) hs)
+    exact lt_of_lt_of_le he (Nat.pow_le_pow_right (by omega) hs)
   · -- e * 2^{K-s} < 2^s * 2^{K-s} = 2^K
     calc e * 2 ^ (K - s)
         < 2 ^ s * 2 ^ (K - s) :=
-          (mul_lt_mul_right (show 0 < 2 ^ (K - s) by positivity)).mpr he
+          mul_lt_mul_of_pos_right he (show 0 < 2 ^ (K - s) by positivity)
       _ = 2 ^ K := by rw [← pow_add]; congr 1; omega
 
 -- ============================================================================
@@ -226,8 +229,8 @@ theorem halo2_short_no_wrap {p : ℕ} (hp : 2 ^ (2 * K) < p)
       < 2 ^ K * 2 ^ (K - s) :=
         mul_lt_mul_of_pos_right he (by positivity)
     _ ≤ 2 ^ K * 2 ^ K :=
-        Nat.mul_le_mul_left (2 ^ K) (Nat.pow_le_pow_left (by omega) (Nat.sub_le K s))
-    _ = 2 ^ (2 * K) := by rw [← pow_add]; congr 1; omega
+        Nat.mul_le_mul_left (2 ^ K) (Nat.pow_le_pow_right (by omega) (Nat.sub_le K s))
+    _ = 2 ^ (2 * K) := by rw [← pow_add]; congr 1
     _ < p := hp
 
 /-- The standard Halo 2 range check equivalence.
